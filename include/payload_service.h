@@ -45,4 +45,12 @@ PayloadStatus_t Payload_ProcessCommand(PayloadCmd_t cmd, uint8_t param);
 void Payload_Update(void); // To be called in the main loop
 PayloadTelemetry_t Payload_GetTelemetry(void);
 
+void PAYLOAD_ProcessCommandWrapper(const uint8_t* payload, uint16_t len);
+
+// --- PAYLOAD FAULT REGISTRY ---
+#define FAULT_PAY_SENSOR_ERROR   0xB101  // Sensor failed to provide data
+#define FAULT_PAY_INVALID_RATE   0xB102  // Ground requested a sampling rate too high
+#define FAULT_PAY_INIT_FAILED    0xB103  // Hardware didn't start correctly
+#define FAULT_PAY_ILL_STATE      0xB104  // Illegal State Command
+
 #endif

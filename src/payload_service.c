@@ -1,10 +1,13 @@
 #include "payload_service.h"
 #include "payload_sim.h"
 #include "archive_service.h"
+#include "commands.h"
+#include "fdir_service.h"
+#include "time_service.h"
 #include <string.h>
 #include <stdio.h>
 
-#define PAYLOAD_RECORD_ID 0x50   // 'P' for Payload
+
 #define SIM_DATA_SIZE 64    // Size of one "Science Packet"
 
 
@@ -37,7 +40,7 @@ void Payload_Update(void){
     PayloadSim_GenerateData(raw_data, SIM_DATA_SIZE);
 
     // 3. Route the data to the Archive Service
-    ArchiveStatus_t arc_status = Archive_WriteRecord(PAYLOAD_RECORD_ID, raw_data, SIM_DATA_SIZE);
+    ArchiveStatus_t arc_status = Archive_WriteRecord(REC_ID_PAYLOAD, raw_data, SIM_DATA_SIZE);
     if (arc_status == ARCHIVE_OK) {
         tl->bytes_generated += SIM_DATA_SIZE;
     } else {
@@ -45,6 +48,17 @@ void Payload_Update(void){
         printf("DEBUG: Archive rejected write! Status Code: %d, Size: %d\n", arc_status, SIM_DATA_SIZE);
         tl->current_state = PL_STATE_ERROR;
         tl->error_counter++;
+
+        // Report to fdir
+        FaultReport_t payload_fault = {
+            .source = SRC_PAYLOAD,
+            .severity = FAULT_WARNING,
+            .fault_code = FAULT_PAY_SENSOR_ERROR,
+            .timestamp = Time_GetSeconds()
+        };
+        FDIR_ReportFault(payload_fault);
+
+        printf("PAYLOAD: Archive rejected write! Moving to ERROR state. [Code: %d]\n", arc_status);
     } 
 }
 
@@ -82,12 +96,31 @@ PayloadStatus_t Payload_ProcessCommand(PayloadCmd_t cmd, uint8_t param) {
             if(param > 0 && param <= 10){   //Limit 10Hz
                 pl_telemetry.data_rate = param;
                 return PL_OK;
+            } else {
+                // Report to fdir
+                FaultReport_t rate_fault = {
+                    .source = SRC_PAYLOAD,
+                    .severity = FAULT_WARNING,
+                    .fault_code = FAULT_PAY_INVALID_RATE,
+                    .timestamp = Time_GetSeconds()
+                };
+                FDIR_ReportFault(rate_fault);
             }
             break;
 
     }
     
-    // If we reach here, the command was invalid for the current state
+    // If the switch breaks or falls through, it means the command was illegal 
+    // for the current state (e.g., trying to START while already ACTIVE).
+    FaultReport_t state_fault = {
+        .source = SRC_PAYLOAD,
+        .severity = FAULT_WARNING,
+        .fault_code = FAULT_PAY_ILL_STATE,
+        .timestamp = Time_GetSeconds()
+    };
+    FDIR_ReportFault(state_fault);
+
+
     return PL_ERR_INVALID_STATE;
 }
 
@@ -95,3 +128,24 @@ PayloadTelemetry_t Payload_GetTelemetry(void) {
     return pl_telemetry;
 }
 
+void PAYLOAD_ProcessCommandWrapper(const uint8_t* payload, uint16_t len) {
+    if (len < 1) return;
+
+    // The first byte is the Command ID (0 to 4)
+    PayloadCmd_t cmd = (PayloadCmd_t)payload[0];
+    
+    // The second byte (if exists) is the parameter (like for SET_RATE)
+    uint8_t param = 0;
+    if (len >= 2) {
+        param = payload[1];
+    }
+
+    // Call your existing logic
+    PayloadStatus_t result = Payload_ProcessCommand(cmd, param);
+
+    if (result != PL_OK) {
+        printf("PAYLOAD: Command %d failed with error %d\n", cmd, result);
+    } else {
+        printf("PAYLOAD: Command %d executed successfully.\n", cmd);
+    }
+}
